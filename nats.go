@@ -94,6 +94,7 @@ type Options struct {
 	Servers        []string
 	NoRandomize    bool
 	Name           string
+	Token          string
 	Verbose        bool
 	Pedantic       bool
 	Secure         bool
@@ -223,6 +224,7 @@ type connectInfo struct {
 	Pedantic bool   `json:"pedantic"`
 	User     string `json:"user,omitempty"`
 	Pass     string `json:"pass,omitempty"`
+	Token    string `json:"auth_token,omitempty"`
 	Ssl      bool   `json:"ssl_required"`
 	Name     string `json:"name"`
 	Lang     string `json:"lang"`
@@ -459,10 +461,7 @@ func (nc *Conn) makeTLSConn() {
 // be shutdown before proceeding.
 func (nc *Conn) waitForExits() {
 	// Kick old flusher forcefully.
-	select {
-	case nc.fch <- true:
-	default:
-	}
+	nc.fch <- true
 
 	//	nc.fch <- true
 	// Wait for any previous go routines.
@@ -658,7 +657,7 @@ func (nc *Conn) connectProto() (string, error) {
 		user = u.Username()
 		pass, _ = u.Password()
 	}
-	cinfo := connectInfo{o.Verbose, o.Pedantic, user, pass,
+	cinfo := connectInfo{o.Verbose, o.Pedantic, user, pass, o.Token,
 		o.Secure, o.Name, LangString, Version}
 	b, err := json.Marshal(cinfo)
 	if err != nil {
@@ -678,13 +677,11 @@ func (nc *Conn) sendConnect() error {
 		nc.mu.Unlock()
 		return err
 	}
-
-	timeout := nc.Opts.Timeout
 	nc.mu.Unlock()
 
 	nc.sendProto(cProto)
 
-	if err := nc.FlushTimeout(timeout); err != nil {
+	if err := nc.FlushTimeout(DefaultTimeout); err != nil {
 		return err
 	}
 
@@ -1173,13 +1170,10 @@ func (nc *Conn) processErr(e string) {
 	if e == STALE_CONNECTION {
 		nc.processOpErr(ErrStaleConnection)
 	} else {
-		var doCbs = true
-
 		nc.mu.Lock()
 		nc.err = errors.New("nats: " + e)
-		doCbs = (nc.status != CONNECTING)
 		nc.mu.Unlock()
-		nc.close(CLOSED, doCbs)
+		nc.Close()
 	}
 }
 
@@ -1210,8 +1204,10 @@ func (nc *Conn) publish(subj, reply string, data []byte) error {
 	var msgSize int64
 	msgSize = int64(len(data))
 	if msgSize > nc.info.MaxPayload {
+		nc.err = ErrMaxPayload
+		err := nc.err
 		nc.mu.Unlock()
-		return ErrMaxPayload
+		return err
 	}
 
 	if nc.isClosed() {

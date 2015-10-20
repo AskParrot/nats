@@ -160,17 +160,9 @@ func TestSlowSubscriber(t *testing.T) {
 	nc := NewDefaultConnection(t)
 	defer nc.Close()
 
-	// Make the sub channel length small so that it reduces the risk of failure
-	// when running with GOMAXPROCS=1 (the server would disconnect the client as
-	// a slow consumer). Alternatively, leave SubChanLen alone, but uncomment the
-	// line in the publish loop).
-	nc.Opts.SubChanLen = 100
-
 	sub, _ := nc.SubscribeSync("foo")
-
 	for i := 0; i < (nc.Opts.SubChanLen + 100); i++ {
 		nc.Publish("foo", []byte("Hello"))
-		//		runtime.Gosched()
 	}
 	timeout := 5 * time.Second
 	start := time.Now()
@@ -195,19 +187,12 @@ func TestSlowAsyncSubscriber(t *testing.T) {
 
 	bch := make(chan bool)
 
-	// Make the sub channel length small so that it reduces the risk of failure
-	// when running with GOMAXPROCS=1 (the server would disconnect the client as
-	// a slow consumer). Alternatively, leave SubChanLen alone, but uncomment the
-	// line in the publish loop).
-	nc.Opts.SubChanLen = 100
-
 	nc.Subscribe("foo", func(_ *nats.Msg) {
 		// block to back us up..
 		<-bch
 	})
 	for i := 0; i < (nc.Opts.SubChanLen + 100); i++ {
 		nc.Publish("foo", []byte("Hello"))
-		//		runtime.Gosched()
 	}
 	timeout := 5 * time.Second
 	start := time.Now()

@@ -66,7 +66,7 @@ func TestReconnectAllowedFlags(t *testing.T) {
 
 	// We want wait to timeout here, and the connection
 	// should not trigger the Close CB.
-	if e := WaitTime(ch, 500*time.Millisecond); e == nil {
+	if e := Wait(ch); e == nil {
 		t.Fatal("Triggered ClosedCB incorrectly")
 	}
 	if !nc.IsReconnecting() {
@@ -114,7 +114,7 @@ func TestBasicReconnectFunctionality(t *testing.T) {
 	opts.DisconnectedCB = func(_ *nats.Conn) {
 		dch <- true
 	}
-	WaitTime(dch, 500*time.Millisecond)
+	Wait(dch)
 
 	if err := ec.Publish("foo", testString); err != nil {
 		t.Fatalf("Failed to publish message: %v\n", err)
@@ -131,18 +131,10 @@ func TestBasicReconnectFunctionality(t *testing.T) {
 		t.Fatal("Did not receive our message")
 	}
 
-	// This test fails sometimes on Travis with '0 vs 1', which is weird.
-	// If we are here, that means that the message published while we
-	// were disconnected has been properly flushed and we have receive that
-	// message. Conn.Reconnects is updated *before* the content of the
-	// pending buffer is flushed, so it cannot be 0 at this point...
-
 	expectedReconnectCount := uint64(1)
-	reconnectCount := ec.Conn.Stats().Reconnects
-
-	if reconnectCount != expectedReconnectCount {
+	if ec.Conn.Reconnects != expectedReconnectCount {
 		t.Fatalf("Reconnect count incorrect: %d vs %d\n",
-			reconnectCount, expectedReconnectCount)
+			ec.Conn.Reconnects, expectedReconnectCount)
 	}
 	nc.Close()
 }
@@ -414,69 +406,4 @@ func TestIsReconnectingAndStatus(t *testing.T) {
 	if status := nc.Status(); status != nats.CLOSED {
 		t.Fatalf("Status returned %d after Close() was called instead of CLOSED", status)
 	}
-}
-
-func TestFullFlushChanDuringReconnect(t *testing.T) {
-	ts := startReconnectServer(t)
-	defer ts.Shutdown()
-
-	reconnectch := make(chan bool)
-
-	opts := nats.DefaultOptions
-	opts.Url = "nats://localhost:22222"
-	opts.AllowReconnect = true
-	opts.MaxReconnect = 10000
-	opts.ReconnectWait = 100 * time.Millisecond
-
-	opts.ReconnectedCB = func(_ *nats.Conn) {
-		reconnectch <- true
-	}
-
-	// Connect
-	nc, err := opts.Connect()
-	if err != nil {
-		t.Fatalf("Should have connected ok: %v", err)
-	}
-
-	// Channel used to make the go routine sending messages to stop.
-	stop := make(chan bool)
-
-	// While connected, publish as fast as we can
-	go func() {
-		for i := 0; ; i++ {
-			_ = nc.Publish("foo", []byte("hello"))
-
-			// Make sure we are sending at least flushChanSize (1024) messages
-			// before potentially pausing.
-			if i%2000 == 0 {
-				select {
-				case <-stop:
-					return
-				default:
-					time.Sleep(100 * time.Millisecond)
-				}
-			}
-		}
-	}()
-
-	// Send a bit...
-	time.Sleep(500 * time.Millisecond)
-
-	// Shut down the server
-	ts.Shutdown()
-
-	// Continue sending while we are disconnected
-	time.Sleep(time.Second)
-
-	// Restart the server
-	ts = startReconnectServer(t)
-	defer ts.Shutdown()
-
-	// Wait for the reconnect CB to be invoked (but not for too long)
-	if e := WaitTime(reconnectch, 5*time.Second); e != nil {
-		t.Fatalf("Reconnect callback wasn't triggered: %v", e)
-	}
-
-	// Close the connection
-	nc.Close()
 }
